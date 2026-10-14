@@ -8,6 +8,7 @@ typedef enum
     TCP_Error_Success = 0,
     TCP_Error_Socket,
     TCP_Error_Bind,
+    TCP_Error_Fcntl,
     TCP_Error_Listen
 } TCP_Error;
 
