@@ -4,7 +4,8 @@
 
 int main(void)
 {
-    TCP_Server_Initialize(1337);
+    TCP_Server server = {0};
+    TCP_Server_Initialize(&server, 1337);
 
     return 0;
 }
