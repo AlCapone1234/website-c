@@ -1,4 +1,5 @@
 #include "tcp_server.h"
+#include "tcp_server_client.h"
 
 #include <stdio.h>
 #include <errno.h>
@@ -41,12 +42,15 @@ TCP_Error TCP_Server_Initialize(uint16_t port)
         return TCP_Error_Fcntl;
     }
 
-    struct sockaddr_in client_addr;
-    socklen_t client_size = sizeof(client_addr);
+    TCP_Server_Client client = {0};
+    TCP_Server_Client_Initialize(&client);
+
 
     while (1)
     {
-        int client_fd = accept(fd, (struct sockaddr*)&client_addr, &client_size);
+        int client_fd = accept(fd, (struct sockaddr*)&client.addr, &client.addr_length);
+        client.fd = client_fd;
+
         if (client_fd < 0) 
         {
             if (errno == EAGAIN || errno == EWOULDBLOCK) 
