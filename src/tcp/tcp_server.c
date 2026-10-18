@@ -11,7 +11,7 @@
 #include <stdlib.h>
 #include <string.h>
 
-TCP_Error TCP_Server_Initialize(TCP_Server* server, uint16_t port)
+TCP_Error TCP_Server_Initialize(TCP_Server* server, uint16_t port, TCP_Server_Callbacks* callbacks)
 {
     if (server == NULL)
     {
@@ -21,6 +21,7 @@ TCP_Error TCP_Server_Initialize(TCP_Server* server, uint16_t port)
     server->clients = NULL;
     server->clients_length = 0;
     server->clients_capacity = TCP_SERVER_CLIENTS_CAPACITY_START; 
+    server->callbacks = callbacks;
 
     int fd = socket(AF_INET, SOCK_STREAM, 0);
     if (fd < 0)
@@ -28,7 +29,7 @@ TCP_Error TCP_Server_Initialize(TCP_Server* server, uint16_t port)
         return TCP_Error_Socket;
     }
 
-    struct sockaddr_in server_addr; 
+    struct sockaddr_in server_addr = {0}; 
 
     server_addr.sin_family = AF_INET; 
     server_addr.sin_addr.s_addr = htonl(INADDR_ANY); 
@@ -47,6 +48,12 @@ TCP_Error TCP_Server_Initialize(TCP_Server* server, uint16_t port)
     }
 
     int flags = fcntl(fd, F_GETFL, 0);
+    if (flags < 0)
+    {
+        close(fd);
+        return TCP_Error_Fcntl;
+    }
+
     if (fcntl(fd, F_SETFL, flags | O_NONBLOCK) < 0) 
     {
         close(fd);
@@ -54,8 +61,16 @@ TCP_Error TCP_Server_Initialize(TCP_Server* server, uint16_t port)
     }
 
     TCP_Server_Client client = {0};
-    TCP_Server_Client_Initialize(&client);
 
+    TCP_Error client_err = TCP_Server_Client_Initialize(&client);
+    if (client_err != TCP_Error_Success)
+    {
+        close(fd);        
+        return client_err;
+    }
+
+    if (callbacks != NULL && callbacks->on_initialized != NULL)
+        callbacks->on_initialized(server);
 
     while (1)
     {
@@ -72,7 +87,14 @@ TCP_Error TCP_Server_Initialize(TCP_Server* server, uint16_t port)
         //printf("Client connected\n");
         //close(client_fd);
 
-        TCP_Server_Add_Client(server, &client);
+        TCP_Error add_result = TCP_Server_Add_Client(server, &client);
+        if (add_result == TCP_Error_Malloc || add_result == TCP_Error_Realloc)
+        {
+            // should probably do something else here.
+            close(fd);
+            close(client_fd);
+            return add_result;
+        }
     }
 
     close(fd);
@@ -87,7 +109,6 @@ TCP_Error TCP_Server_Add_Client(TCP_Server* server, TCP_Server_Client* client)
     if (client == NULL)
         return TCP_Error_Client_Is_NULL;
 
-    
     if (server->clients == NULL)
     {
         server->clients = (TCP_Server_Client*)malloc(sizeof(TCP_Server_Client) * TCP_SERVER_CLIENTS_CAPACITY_START);
@@ -101,7 +122,9 @@ TCP_Error TCP_Server_Add_Client(TCP_Server* server, TCP_Server_Client* client)
     else if (server->clients_length >= server->clients_capacity)
     {
         if (server->clients_capacity < 1)
+        {
             return TCP_Error_Clients_Capacity_Is_Less_Than_One;
+        }
 
         server->clients_capacity *= 2;
         
@@ -118,7 +141,29 @@ TCP_Error TCP_Server_Add_Client(TCP_Server* server, TCP_Server_Client* client)
         memcpy(&server->clients[server->clients_length++], client, sizeof(TCP_Server_Client));
     }
 
-    printf("Current clients: %ld\n", server->clients_length);
+    //printf("Current clients: %ld\n", server->clients_length);
+
+    return TCP_Error_Success;
+}
+
+TCP_Error TCP_Server_Dispose(TCP_Server* server)
+{
+    if (server == NULL)
+        return TCP_Error_Server_Is_NULL;
+
+    if (server->clients != NULL)
+    {
+        for (size_t i = 0; i < server->clients_length; i++)
+        {
+            close(server->clients[i].fd);
+        }
+
+        free(server->clients);
+        server->clients = NULL;
+    }
+
+    if (server->callbacks->on_shutdown != NULL)
+        server->callbacks->on_shutdown(server);
 
     return TCP_Error_Success;
 }

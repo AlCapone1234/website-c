@@ -2,36 +2,38 @@
 #define TCP_SERVER_H
 
 #include "tcp_server_client.h"
+#include "tcp_error.h"
 
 #include <stdint.h>
 #include <stddef.h>
+#include <pthread.h>
+#include <stdbool.h>
 
 #ifndef TCP_SERVER_CLIENTS_CAPACITY_START
     #define TCP_SERVER_CLIENTS_CAPACITY_START 4
 #endif
 
-typedef enum
-{
-    TCP_Error_Success = 0,
-    TCP_Error_Socket,
-    TCP_Error_Bind,
-    TCP_Error_Fcntl,
-    TCP_Error_Listen,
-    TCP_Error_Client_Is_NULL,
-    TCP_Error_Server_Is_NULL,
-    TCP_Error_Malloc,
-    TCP_Error_Realloc,
-    TCP_Error_Clients_Capacity_Is_Less_Than_One,
-} TCP_Error;
+typedef struct TCP_Server TCP_Server;
+typedef void (*TCP_Server_On_Initialized)(TCP_Server*);
+typedef void (*TCP_Server_On_Shutdown)(TCP_Server*);
 
-typedef struct 
+typedef struct
+{
+    TCP_Server_On_Initialized on_initialized;
+    TCP_Server_On_Shutdown on_shutdown;
+} TCP_Server_Callbacks;
+
+struct TCP_Server
 {
     TCP_Server_Client* clients;
     size_t clients_length;
     size_t clients_capacity;
-} TCP_Server;
 
-TCP_Error TCP_Server_Initialize(TCP_Server* server, uint16_t port);
+    TCP_Server_Callbacks* callbacks;    
+};
+
+TCP_Error TCP_Server_Initialize(TCP_Server* server, uint16_t port, TCP_Server_Callbacks* callbacks);
 TCP_Error TCP_Server_Add_Client(TCP_Server* server, TCP_Server_Client* client);
+TCP_Error TCP_Server_Dispose(TCP_Server* server);
 
 #endif
