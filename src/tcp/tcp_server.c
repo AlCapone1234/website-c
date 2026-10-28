@@ -11,6 +11,56 @@
 #include <stdlib.h>
 #include <string.h>
 
+#define MAX_BUFFER 4096
+
+void* clients_loop(void* arg)
+{
+    TCP_Server* server = (TCP_Server*)arg;
+
+    while (1)
+    {
+        pthread_mutex_lock(&server->mutex);
+        for (size_t i = 0; i < server->clients_length; i++)
+        {
+            ssize_t total_bytes = 0;
+            char buffer[MAX_BUFFER];
+
+            while (1)
+            {
+                if (MAX_BUFFER - total_bytes <= 0)
+                {
+                    break;
+                }
+
+                ssize_t bytes_read = recv(server->clients[i].fd, &buffer[total_bytes], MAX_BUFFER - total_bytes, 0);
+
+                if (bytes_read > 0)
+                {
+                    total_bytes += bytes_read;
+                }
+                else if (bytes_read < 0)
+                {
+                    break;
+                }
+                else if (bytes_read == 0)
+                {
+                    if (total_bytes == 0)
+                        break;
+
+                    buffer[total_bytes] = '\0';
+                    printf("Reading: [%s]\n", buffer);
+
+                    TCP_Error result = TCP_Server_Remove_Client(server, &server->clients[i]);
+                    if (result != TCP_Error_Success)
+                        printf("Failed to remove TCP_Server_Client\n");
+                }
+            }
+
+        }
+        pthread_mutex_unlock(&server->mutex);
+    }
+}
+
 TCP_Error TCP_Server_Initialize(TCP_Server* server, uint16_t port, TCP_Server_Callbacks* callbacks)
 {
     if (server == NULL)
@@ -71,6 +121,12 @@ TCP_Error TCP_Server_Initialize(TCP_Server* server, uint16_t port, TCP_Server_Ca
 
     if (callbacks != NULL && callbacks->on_initialized != NULL)
         callbacks->on_initialized(server);
+
+    pthread_mutex_init(&server->mutex, NULL);
+
+    pthread_t clients_thread;
+    pthread_create(&clients_thread, NULL, clients_loop, server);
+    pthread_detach(clients_thread);
 
     while (1)
     {
@@ -166,4 +222,29 @@ TCP_Error TCP_Server_Dispose(TCP_Server* server)
         server->callbacks->on_shutdown(server);
 
     return TCP_Error_Success;
+}
+
+TCP_Error TCP_Server_Remove_Client(TCP_Server* server, TCP_Server_Client* client)
+{
+    if (server == NULL)
+        return TCP_Error_Server_Is_NULL;
+
+    if (client == NULL)
+        return TCP_Error_Client_Is_NULL;
+
+
+    for (size_t i = 0; i < server->clients_length; i++)
+    {
+        if (&server->clients[i] == client)
+        {
+            close(server->clients[i].fd);
+            server->clients[i] = server->clients[server->clients_length - 1];
+            memset(&server->clients[server->clients_length - 1], 0, sizeof(TCP_Server_Client));
+            server->clients_length--;
+
+            return TCP_Error_Success;
+        }
+    }
+
+    return TCP_Error_Client_Could_Not_Be_Found;
 }

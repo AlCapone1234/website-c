@@ -7,7 +7,6 @@
 #include <stdint.h>
 #include <stddef.h>
 #include <pthread.h>
-#include <stdbool.h>
 
 #ifndef TCP_SERVER_CLIENTS_CAPACITY_START
     #define TCP_SERVER_CLIENTS_CAPACITY_START 4
@@ -29,11 +28,14 @@ struct TCP_Server
     size_t clients_length;
     size_t clients_capacity;
 
+    pthread_mutex_t mutex;
+
     TCP_Server_Callbacks* callbacks;    
 };
 
 TCP_Error TCP_Server_Initialize(TCP_Server* server, uint16_t port, TCP_Server_Callbacks* callbacks);
 TCP_Error TCP_Server_Add_Client(TCP_Server* server, TCP_Server_Client* client);
+TCP_Error TCP_Server_Remove_Client(TCP_Server* server, TCP_Server_Client* client);
 TCP_Error TCP_Server_Dispose(TCP_Server* server);
 
 #endif

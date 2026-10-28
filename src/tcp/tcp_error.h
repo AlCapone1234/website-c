@@ -14,6 +14,7 @@ typedef enum
     TCP_Error_Realloc,
     TCP_Error_Clients_Capacity_Is_Less_Than_One,
     TCP_Error_Mutex,
+    TCP_Error_Client_Could_Not_Be_Found,
 } TCP_Error;
 
 
