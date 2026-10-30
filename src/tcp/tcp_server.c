@@ -10,56 +10,8 @@
 #include <fcntl.h>
 #include <stdlib.h>
 #include <string.h>
+#include <poll.h>
 
-#define MAX_BUFFER 4096
-
-void* clients_loop(void* arg)
-{
-    TCP_Server* server = (TCP_Server*)arg;
-
-    while (1)
-    {
-        pthread_mutex_lock(&server->mutex);
-        for (size_t i = 0; i < server->clients_length; i++)
-        {
-            ssize_t total_bytes = 0;
-            char buffer[MAX_BUFFER];
-
-            while (1)
-            {
-                if (MAX_BUFFER - total_bytes <= 0)
-                {
-                    break;
-                }
-
-                ssize_t bytes_read = recv(server->clients[i].fd, &buffer[total_bytes], MAX_BUFFER - total_bytes, 0);
-
-                if (bytes_read > 0)
-                {
-                    total_bytes += bytes_read;
-                }
-                else if (bytes_read < 0)
-                {
-                    break;
-                }
-                else if (bytes_read == 0)
-                {
-                    if (total_bytes == 0)
-                        break;
-
-                    buffer[total_bytes] = '\0';
-                    printf("Reading: [%s]\n", buffer);
-
-                    TCP_Error result = TCP_Server_Remove_Client(server, &server->clients[i]);
-                    if (result != TCP_Error_Success)
-                        printf("Failed to remove TCP_Server_Client\n");
-                }
-            }
-
-        }
-        pthread_mutex_unlock(&server->mutex);
-    }
-}
 
 TCP_Error TCP_Server_Initialize(TCP_Server* server, uint16_t port, TCP_Server_Callbacks* callbacks)
 {
@@ -98,13 +50,7 @@ TCP_Error TCP_Server_Initialize(TCP_Server* server, uint16_t port, TCP_Server_Ca
     }
 
     int flags = fcntl(fd, F_GETFL, 0);
-    if (flags < 0)
-    {
-        close(fd);
-        return TCP_Error_Fcntl;
-    }
-
-    if (fcntl(fd, F_SETFL, flags | O_NONBLOCK) < 0) 
+    if (flags < 0 || fcntl(fd, F_SETFL, flags | O_NONBLOCK) < 0)
     {
         close(fd);
         return TCP_Error_Fcntl;
@@ -122,34 +68,105 @@ TCP_Error TCP_Server_Initialize(TCP_Server* server, uint16_t port, TCP_Server_Ca
     if (callbacks != NULL && callbacks->on_initialized != NULL)
         callbacks->on_initialized(server);
 
-    pthread_mutex_init(&server->mutex, NULL);
-
-    pthread_t clients_thread;
-    pthread_create(&clients_thread, NULL, clients_loop, server);
-    pthread_detach(clients_thread);
-
     while (1)
     {
-        int client_fd = accept(fd, (struct sockaddr*)&client.addr, &client.addr_length);
-        client.fd = client_fd;
+        struct pollfd pollfds[server->clients_length + 1];
+        pollfds[0].fd = fd;
+        pollfds[0].events = POLLIN;
 
-        if (client_fd < 0) 
+        int nfds = 1;
+        for (size_t i = 0; i < server->clients_length; i++)
         {
-            if (errno == EAGAIN || errno == EWOULDBLOCK) 
-                continue;
-            perror("accept");
-            break;
+            pollfds[nfds].fd = server->clients[i].fd;
+            pollfds[nfds].events = POLLIN;
+            pollfds[nfds].revents = 0;
+            nfds++;
         }
-        //printf("Client connected\n");
-        //close(client_fd);
 
-        TCP_Error add_result = TCP_Server_Add_Client(server, &client);
-        if (add_result == TCP_Error_Malloc || add_result == TCP_Error_Realloc)
+        int ready = poll(pollfds, nfds, 100);
+        if (ready <= 0)
+            continue;
+
+
+        if (pollfds[0].revents & POLLIN)
         {
-            // should probably do something else here.
-            close(fd);
-            close(client_fd);
-            return add_result;
+            int client_fd = accept(fd, (struct sockaddr*)&client.addr, &client.addr_length);
+            client.fd = client_fd;
+
+            if (client_fd < 0) 
+            {
+                if (errno == EAGAIN || errno == EWOULDBLOCK) 
+                    continue;
+                perror("accept");
+                break;
+            }
+
+            int client_flags = fcntl(client_fd, F_GETFL, 0);
+            if (client_flags < 0 || fcntl(client_fd, F_SETFL, client_flags | O_NONBLOCK) < 0)
+            {
+                close(client_fd);
+                return TCP_Error_Fcntl;
+            }
+
+            TCP_Error add_result = TCP_Server_Add_Client(server, &client);
+            if (add_result == TCP_Error_Malloc || add_result == TCP_Error_Realloc)
+            {
+                // should probably do something else here.
+                close(fd);
+                close(client_fd);
+                return add_result;
+            }
+
+        }
+
+        for (size_t i = 0; i < server->clients_length; i++)
+        {
+            TCP_Server_Client* client = &server->clients[i];
+
+            int pfd = -1;
+            for (size_t j = 0; j < server->clients_length + 1; j++)
+                if (pollfds[j].fd == client->fd)
+                    pfd = j;
+
+            if (pfd < 0)
+                continue;
+
+            if (pollfds[pfd].revents & (POLLERR | POLLHUP | POLLNVAL))
+            {
+                TCP_Server_Remove_Client(server, client);
+                i--;
+                continue;
+            }
+
+            if (pollfds[pfd].revents & POLLIN)
+            {
+                ssize_t bytes = recv(client->fd, client->outgoing_buffer, TCP_SERVER_CLIENT_MAX_BUFFER - 1, 0);
+
+                if (bytes > 0)
+                {
+                    client->outgoing_buffer[bytes] = '\0';
+                    printf("Received from fd %d: %s\n", client->fd, client->outgoing_buffer);
+                }
+                else if (bytes == 0)
+                {
+                    // orderly shutdown
+                    printf("Client fd %d disconnected\n", client->fd);
+                    TCP_Server_Remove_Client(server, client);
+                    i--;
+                    continue;
+                }
+                else
+                {
+                    if (errno != EAGAIN && errno != EWOULDBLOCK)
+                    {
+                        perror("recv");
+                        TCP_Server_Remove_Client(server, client);
+                        i--;
+                        continue;
+                    }
+                }
+            }
+
         }
     }
 
@@ -231,7 +248,6 @@ TCP_Error TCP_Server_Remove_Client(TCP_Server* server, TCP_Server_Client* client
 
     if (client == NULL)
         return TCP_Error_Client_Is_NULL;
-
 
     for (size_t i = 0; i < server->clients_length; i++)
     {

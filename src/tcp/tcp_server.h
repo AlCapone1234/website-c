@@ -28,8 +28,6 @@ struct TCP_Server
     size_t clients_length;
     size_t clients_capacity;
 
-    pthread_mutex_t mutex;
-
     TCP_Server_Callbacks* callbacks;    
 };
 
